@@ -1,5 +1,5 @@
 mod client;
-mod openapi;
+pub(crate) mod openapi;
 mod sse;
 mod stdio;
 mod streamablehttp;

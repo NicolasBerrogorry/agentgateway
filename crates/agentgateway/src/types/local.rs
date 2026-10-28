@@ -412,7 +412,7 @@ pub struct LocalConfig {
 	#[serde(default)]
 	llm: Option<LocalLLMConfig>,
 	/// mcp defines a set of MCP servers exposed by the proxy. When configured, the MCP servers will be
-	/// served under the attached `gateways` at /mcp and /sse.
+	/// served under the attached `gateways` at /mcp and /sse, and OpenAPI targets as plain HTTP at /rest.
 	/// All MCP servers listed will be served as a single virtual MCP server.
 	#[serde(default)]
 	mcp: Option<LocalSimpleMcpConfig>,
@@ -2114,6 +2114,12 @@ fn mcp_matches() -> Vec<RouteMatch> {
 		RouteMatch {
 			headers: vec![],
 			path: PathMatch::PathPrefix("/sse".into()),
+			method: None,
+			query: vec![],
+		},
+		RouteMatch {
+			headers: vec![],
+			path: PathMatch::PathPrefix("/rest".into()),
 			method: None,
 			query: vec![],
 		},

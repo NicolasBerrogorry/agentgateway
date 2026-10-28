@@ -167,7 +167,18 @@ impl App {
 			log.request_processing_duration = Some(log.request_processing_start.elapsed());
 		}
 		let upstream_start = Instant::now();
-		let mut response = if req.uri().path() == "/sse" {
+		let mut response = if mcp::rest::is_rest_path(req.uri().path()) {
+			// The OpenAPI targets as plain HTTP, after the same authentication.
+			Box::pin(mcp::rest::serve(
+				req,
+				mcp::rest::Inputs {
+					backend: backends.clone(),
+					policies: authorization_policies.clone(),
+					client: client.clone(),
+				},
+			))
+			.await
+		} else if req.uri().path() == "/sse" {
 			// Legacy handling
 			// Assume this is streamable HTTP otherwise
 			let sse = LegacySSEService::new(sessions);
