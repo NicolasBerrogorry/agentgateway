@@ -13,9 +13,7 @@ use once_cell::sync::Lazy;
 use openapiv3::OpenAPI;
 use percent_encoding::{AsciiSet, utf8_percent_encode};
 use regex::Regex;
-use rmcp::model::{
-	CallToolResult, ClientRequest, ContentBlock, JsonObject, JsonRpcRequest, Tool,
-};
+use rmcp::model::{CallToolResult, ClientRequest, ContentBlock, JsonObject, JsonRpcRequest, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::{debug, warn};
@@ -220,7 +218,10 @@ fn translate_oas30(out: &mut Map<String, Value>) {
 		}
 	}
 	out.remove("nullable");
-	for (bound, exclusive) in [("minimum", "exclusiveMinimum"), ("maximum", "exclusiveMaximum")] {
+	for (bound, exclusive) in [
+		("minimum", "exclusiveMinimum"),
+		("maximum", "exclusiveMaximum"),
+	] {
 		let Some(Value::Bool(flag)) = out.get(exclusive).cloned() else {
 			continue;
 		};
@@ -266,7 +267,12 @@ fn str_of(v: Option<&Value>) -> Option<&str> {
 fn json_content_schema(content: Option<&Value>) -> Option<&Map<String, Value>> {
 	let content = content?.as_object()?;
 	let key = content.keys().find(|k| {
-		let mt = k.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+		let mt = k
+			.split(';')
+			.next()
+			.unwrap_or("")
+			.trim()
+			.to_ascii_lowercase();
 		mt == "application/json" || mt.ends_with("+json") || mt == "application/*" || mt == "*/*"
 	})?;
 	content.get(key)?.as_object()?.get("schema")?.as_object()
@@ -425,7 +431,11 @@ impl<'a> Reader<'a> {
 		(!defs.is_empty()).then_some(defs)
 	}
 
-	fn lift_input_schema(&mut self, path_item: &Map<String, Value>, op: &Map<String, Value>) -> InputLift {
+	fn lift_input_schema(
+		&mut self,
+		path_item: &Map<String, Value>,
+		op: &Map<String, Value>,
+	) -> InputLift {
 		let doc = self.doc;
 		let mut needed = BTreeSet::new();
 		let request_body = op.get("requestBody").and_then(|rb| deref(doc, rb));
@@ -456,7 +466,12 @@ impl<'a> Reader<'a> {
 		}
 		let mut lifted = match body {
 			Some(body) => self
-				.copy_schema(&Value::Object(body), &mut needed, &BTreeSet::new(), Drop::ReadOnly)
+				.copy_schema(
+					&Value::Object(body),
+					&mut needed,
+					&BTreeSet::new(),
+					Drop::ReadOnly,
+				)
 				.as_object()
 				.cloned()
 				.unwrap_or_default(),
@@ -466,7 +481,9 @@ impl<'a> Reader<'a> {
 		if lifted.get("type").is_none() {
 			// A composition root keeps its meaning one level down, so parameters merge into
 			// the wrapper; a bare root just gains the type it already implied.
-			wrapped = ["allOf", "anyOf", "oneOf"].iter().any(|k| lifted.contains_key(*k));
+			wrapped = ["allOf", "anyOf", "oneOf"]
+				.iter()
+				.any(|k| lifted.contains_key(*k));
 			if wrapped {
 				let inner = Value::Object(std::mem::take(&mut lifted));
 				lifted.insert("type".into(), json!("object"));
@@ -481,7 +498,12 @@ impl<'a> Reader<'a> {
 		let mut required: Vec<String> = lifted
 			.get("required")
 			.and_then(Value::as_array)
-			.map(|r| r.iter().filter_map(Value::as_str).map(String::from).collect())
+			.map(|r| {
+				r.iter()
+					.filter_map(Value::as_str)
+					.map(String::from)
+					.collect()
+			})
 			.unwrap_or_default();
 		if octet {
 			lifted["properties"]["body"] = json!({
@@ -515,11 +537,17 @@ impl<'a> Reader<'a> {
 					"header" => "header",
 					"cookie" => "cookie",
 					other => {
-						self.warn(format!("parameter \"{name}\" skipped: unknown location \"{other}\""));
+						self.warn(format!(
+							"parameter \"{name}\" skipped: unknown location \"{other}\""
+						));
 						continue;
 					},
 				};
-				let merge_name = if location == "header" { name.to_ascii_lowercase() } else { name.to_string() };
+				let merge_name = if location == "header" {
+					name.to_ascii_lowercase()
+				} else {
+					name.to_string()
+				};
 				let key = format!("{location}:{merge_name}");
 				match params.iter_mut().find(|(k, _)| *k == key) {
 					Some((_, existing)) => *existing = p.clone(),
@@ -542,8 +570,14 @@ impl<'a> Reader<'a> {
 				ParameterLocation::Header => "header",
 				ParameterLocation::Cookie => "cookie",
 			};
-			let properties = lifted["properties"].as_object_mut().expect("properties is an object");
-			let key = if properties.contains_key(&name) { format!("{location_name}_{name}") } else { name.clone() };
+			let properties = lifted["properties"]
+				.as_object_mut()
+				.expect("properties is an object");
+			let key = if properties.contains_key(&name) {
+				format!("{location_name}_{name}")
+			} else {
+				name.clone()
+			};
 			let mut schema = match p.get("schema") {
 				Some(s @ Value::Object(_)) => self
 					.copy_schema(s, &mut needed, &BTreeSet::new(), Drop::ReadOnly)
@@ -560,7 +594,9 @@ impl<'a> Reader<'a> {
 			if p.get("deprecated") == Some(&Value::Bool(true)) {
 				schema.insert("deprecated".into(), json!(true));
 			}
-			let properties = lifted["properties"].as_object_mut().expect("properties is an object");
+			let properties = lifted["properties"]
+				.as_object_mut()
+				.expect("properties is an object");
 			properties.insert(key.clone(), Value::Object(schema));
 			// OpenAPI requires a path parameter to be `required: true`; a document that omits
 			// it still describes a mandatory value — the template has nowhere else to put it.
@@ -600,7 +636,9 @@ impl<'a> Reader<'a> {
 			&& inner.get("additionalProperties") == Some(&Value::Bool(false))
 		{
 			inner.remove("additionalProperties");
-			let operation_id = str_of(op.get("operationId")).unwrap_or_default().to_string();
+			let operation_id = str_of(op.get("operationId"))
+				.unwrap_or_default()
+				.to_string();
 			self.warn(format!(
 				"{operation_id}: closed request body opened at the root so its parameters can sit beside it"
 			));
@@ -622,7 +660,11 @@ impl<'a> Reader<'a> {
 	// documents an output.
 	fn lift_output_schema(&mut self, op: &Map<String, Value>) -> Option<Map<String, Value>> {
 		let doc = self.doc;
-		let responses = op.get("responses").and_then(Value::as_object).cloned().unwrap_or_default();
+		let responses = op
+			.get("responses")
+			.and_then(Value::as_object)
+			.cloned()
+			.unwrap_or_default();
 		let mut needed = BTreeSet::new();
 		let mut lifted: Vec<Value> = Vec::new();
 		let mut seen = HashSet::new();
@@ -633,7 +675,12 @@ impl<'a> Reader<'a> {
 			let Some(schema) = deref(doc, raw).and_then(|r| json_content_schema(r.get("content"))) else {
 				continue;
 			};
-			let copy = self.copy_schema(&Value::Object(schema.clone()), &mut needed, &BTreeSet::new(), Drop::WriteOnly);
+			let copy = self.copy_schema(
+				&Value::Object(schema.clone()),
+				&mut needed,
+				&BTreeSet::new(),
+				Drop::WriteOnly,
+			);
 			if seen.insert(copy.to_string()) {
 				lifted.push(copy);
 			}
@@ -659,7 +706,11 @@ impl<'a> Reader<'a> {
 	// first entry is read: a relative URL is the path itself; an absolute or
 	// protocol-relative one contributes what follows its authority. Server variables take
 	// their default.
-	fn base_path(&mut self, path_item: &Map<String, Value>, op: &Map<String, Value>) -> Option<String> {
+	fn base_path(
+		&mut self,
+		path_item: &Map<String, Value>,
+		op: &Map<String, Value>,
+	) -> Option<String> {
 		let servers = [op.get("servers"), path_item.get("servers")]
 			.into_iter()
 			.flatten()
@@ -667,7 +718,10 @@ impl<'a> Reader<'a> {
 		let first = servers.first()?.as_object()?;
 		let url = first.get("url")?.as_str()?;
 		if servers.len() > 1 {
-			self.warn(format!("{} servers declared; only the first ({url}) is used", servers.len()));
+			self.warn(format!(
+				"{} servers declared; only the first ({url}) is used",
+				servers.len()
+			));
 		}
 		let variables = first.get("variables").and_then(Value::as_object);
 		let mut substituted = String::new();
@@ -687,7 +741,9 @@ impl<'a> Reader<'a> {
 			{
 				Some(fallback) => substituted.push_str(fallback),
 				None => {
-					self.warn(format!("server variable \"{name}\" has no default; left as {{{name}}}"));
+					self.warn(format!(
+						"server variable \"{name}\" has no default; left as {{{name}}}"
+					));
 					substituted.push_str(&rest[open..open + close + 1]);
 				},
 			}
@@ -705,21 +761,35 @@ impl<'a> Reader<'a> {
 			None => url.as_str(),
 		}
 		.to_string();
-		path = path.split('?').next().unwrap_or("").split('#').next().unwrap_or("").to_string();
+		path = path
+			.split('?')
+			.next()
+			.unwrap_or("")
+			.split('#')
+			.next()
+			.unwrap_or("")
+			.to_string();
 		let path = path.trim_end_matches('/');
 		if path.is_empty() {
 			return Some(String::new());
 		}
-		Some(if path.starts_with('/') { path.to_string() } else { format!("/{path}") })
+		Some(if path.starts_with('/') {
+			path.to_string()
+		} else {
+			format!("/{path}")
+		})
 	}
 }
+
+/// The tools of a document and the warnings raised for operations left out.
+pub(crate) type ParsedWithWarnings = (Vec<(Tool, UpstreamOpenAPICall)>, Vec<String>);
 
 /// Every documented operation as a tool and its route, plus what was read imperfectly
 /// (external refs, skipped operations, forced parameters…): an operation that cannot be
 /// read degrades to a warning, never to a failed target.
 pub(crate) fn parse_openapi_schema_with_warnings(
 	open_api: &OpenAPI,
-) -> Result<(Vec<(Tool, UpstreamOpenAPICall)>, Vec<String>), ParseError> {
+) -> Result<ParsedWithWarnings, ParseError> {
 	let doc = serde_json::to_value(open_api).map_err(ParseError::SerdeError)?;
 	let dialect = dialect_of(&open_api.openapi);
 	let mut reader = Reader {
@@ -733,23 +803,34 @@ pub(crate) fn parse_openapi_schema_with_warnings(
 			open_api.openapi
 		));
 	}
-	let paths = doc.get("paths").and_then(Value::as_object).cloned().unwrap_or_default();
+	let paths = doc
+		.get("paths")
+		.and_then(Value::as_object)
+		.cloned()
+		.unwrap_or_default();
 	let mut tools = Vec::new();
 	for (path, item) in &paths {
-		let Some(item) = item.as_object() else { continue };
+		let Some(item) = item.as_object() else {
+			continue;
+		};
 		for method in HTTP_METHODS {
 			let Some(op) = item.get(method).and_then(Value::as_object) else {
 				continue;
 			};
 			let Some(name) = str_of(op.get("operationId")).map(String::from) else {
-				reader.warn(format!("{} {path} skipped: no operationId", method.to_uppercase()));
+				reader.warn(format!(
+					"{} {path} skipped: no operationId",
+					method.to_uppercase()
+				));
 				continue;
 			};
 			let output = reader.lift_output_schema(op);
 			let input = reader.lift_input_schema(item, op);
 			let base_path = reader.base_path(item, op);
 
-			let summary = str_of(op.get("summary")).filter(|s| !s.is_empty()).map(String::from);
+			let summary = str_of(op.get("summary"))
+				.filter(|s| !s.is_empty())
+				.map(String::from);
 			let description = str_of(op.get("description"))
 				.map(String::from)
 				.or_else(|| summary.clone())
@@ -846,7 +927,7 @@ fn substitute_path_params(
 
 /// Normalizes URL path construction to avoid double slashes
 /// Ensures exactly one slash between prefix and path components
-fn normalize_url_path(prefix: &str, path: &str) -> String {
+pub(crate) fn normalize_url_path(prefix: &str, path: &str) -> String {
 	let prefix = prefix.trim_end_matches('/');
 	let path = if path.starts_with('/') {
 		path
@@ -1027,7 +1108,9 @@ impl Handler {
 		let mut header_params = JsonObject::new();
 		let mut consumed: HashSet<&str> = HashSet::new();
 		for p in &info.parameters {
-			let Some(value) = args.get(&p.key) else { continue };
+			let Some(value) = args.get(&p.key) else {
+				continue;
+			};
 			consumed.insert(p.key.as_str());
 			match p.location {
 				ParameterLocation::Path => {
@@ -1043,19 +1126,20 @@ impl Handler {
 				_ => {},
 			}
 		}
-		let body_value: Option<Value> = if info.content_type.as_deref() == Some("application/octet-stream") {
-			args.get("body").cloned()
-		} else if info.request_body {
-			Some(Value::Object(
-				args
-					.iter()
-					.filter(|(k, _)| !consumed.contains(k.as_str()))
-					.map(|(k, v)| (k.clone(), v.clone()))
-					.collect(),
-			))
-		} else {
-			None
-		};
+		let body_value: Option<Value> =
+			if info.content_type.as_deref() == Some("application/octet-stream") {
+				args.get("body").cloned()
+			} else if info.request_body {
+				Some(Value::Object(
+					args
+						.iter()
+						.filter(|(k, _)| !consumed.contains(k.as_str()))
+						.map(|(k, v)| (k.clone(), v.clone()))
+						.collect(),
+				))
+			} else {
+				None
+			};
 
 		// --- URL Construction ---
 		// Substitute path parameters into the path template in a single pass

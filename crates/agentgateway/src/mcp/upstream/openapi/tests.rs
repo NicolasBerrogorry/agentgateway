@@ -1687,12 +1687,8 @@ async fn test_call_tool_structured_content_fallback() {
 		jsonrpc: JsonRpcVersion2_0,
 		id: RequestId::String("test-123".into()),
 		request: ClientRequest::CallToolRequest(CallToolRequest::new(
-			CallToolRequestParams::new("get_user").with_arguments(
-				json!({ "user_id": user_id })
-					.as_object()
-					.unwrap()
-					.clone(),
-			),
+			CallToolRequestParams::new("get_user")
+				.with_arguments(json!({ "user_id": user_id }).as_object().unwrap().clone()),
 		)),
 	};
 
@@ -2291,7 +2287,15 @@ fn doc_with(extra: Value, paths: Value) -> OpenAPI {
 
 fn only_tool(open_api: &OpenAPI) -> (Tool, UpstreamOpenAPICall, Vec<String>) {
 	let (mut tools, warnings) = super::parse_openapi_schema_with_warnings(open_api).expect("parses");
-	assert_eq!(tools.len(), 1, "one operation expected, got {:?}", tools.iter().map(|t| t.0.name.to_string()).collect::<Vec<_>>());
+	assert_eq!(
+		tools.len(),
+		1,
+		"one operation expected, got {:?}",
+		tools
+			.iter()
+			.map(|t| t.0.name.to_string())
+			.collect::<Vec<_>>()
+	);
 	let (tool, upstream) = tools.pop().unwrap();
 	(tool, upstream, warnings)
 }
@@ -2325,7 +2329,12 @@ fn flat_input_merges_parameters_beside_the_body_and_prefixes_a_collision() {
 			}
 		}
 	})));
-	let mut keys: Vec<_> = tool.input_schema["properties"].as_object().unwrap().keys().cloned().collect();
+	let mut keys: Vec<_> = tool.input_schema["properties"]
+		.as_object()
+		.unwrap()
+		.keys()
+		.cloned()
+		.collect();
 	keys.sort();
 	assert_eq!(keys, ["X-Trace", "format", "id", "query_format", "since"]);
 	assert_eq!(tool.input_schema["required"], json!(["id", "query_format"]));
@@ -2336,7 +2345,12 @@ fn flat_input_merges_parameters_beside_the_body_and_prefixes_a_collision() {
 			route("id", ParameterLocation::Path, true),
 			route("since", ParameterLocation::Query, false),
 			route("X-Trace", ParameterLocation::Header, false),
-			ParameterRoute { name: "format".into(), location: ParameterLocation::Query, key: "query_format".into(), required: true },
+			ParameterRoute {
+				name: "format".into(),
+				location: ParameterLocation::Query,
+				key: "query_format".into(),
+				required: true
+			},
 		]
 	);
 }
@@ -2361,7 +2375,7 @@ async fn a_collided_parameter_travels_by_its_location_and_the_body_keeps_its_own
 	Mock::given(method("POST"))
 		.and(path("/jobs"))
 		.and(query_param("format", "json"))
-		.and(body_json(&json!({"format": "py", "code": "print(1)"})))
+		.and(body_json(json!({"format": "py", "code": "print(1)"})))
 		.respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
 		.expect(1)
 		.mount(&server)
@@ -2369,7 +2383,12 @@ async fn a_collided_parameter_travels_by_its_location_and_the_body_keeps_its_own
 	let result = handler
 		.call_tool(
 			"submit",
-			Some(json!({"query_format": "json", "format": "py", "code": "print(1)"}).as_object().unwrap().clone()),
+			Some(
+				json!({"query_format": "json", "format": "py", "code": "print(1)"})
+					.as_object()
+					.unwrap()
+					.clone(),
+			),
 			&IncomingRequestContext::empty(),
 		)
 		.await
@@ -2409,9 +2428,18 @@ async fn handler_for(parsed: &reqwest::Url, tools: Vec<(Tool, UpstreamOpenAPICal
 	let client = PolicyClient::new(pi.clone());
 	let backend = SimpleBackend::Opaque(
 		ResourceName::new(strng::literal!("dummy"), "".into()),
-		Target::Hostname(parsed.host().unwrap().to_string().into(), parsed.port().unwrap_or(8080)),
+		Target::Hostname(
+			parsed.host().unwrap().to_string().into(),
+			parsed.port().unwrap_or(8080),
+		),
 	);
-	let upstream_client = super::super::McpHttpClient::new(client, backend, BackendPolicies::default(), false, "test-target".to_string());
+	let upstream_client = super::super::McpHttpClient::new(
+		client,
+		backend,
+		BackendPolicies::default(),
+		false,
+		"test-target".to_string(),
+	);
 	Handler::new(upstream_client, tools, "".to_string())
 }
 
@@ -2425,21 +2453,37 @@ fn a_root_ref_body_is_inlined_and_its_closure_lands_under_defs() {
 		post_body(json!({"$ref": "#/components/schemas/Job"})),
 	));
 	assert_eq!(tool.input_schema["type"], json!("object"));
-	assert_eq!(tool.input_schema["properties"]["step"], json!({"$ref": "#/$defs/Step"}));
-	assert_eq!(tool.input_schema["properties"]["next"], json!({"$ref": "#/$defs/Job"}));
+	assert_eq!(
+		tool.input_schema["properties"]["step"],
+		json!({"$ref": "#/$defs/Step"})
+	);
+	assert_eq!(
+		tool.input_schema["properties"]["next"],
+		json!({"$ref": "#/$defs/Job"})
+	);
 	let defs = tool.input_schema["$defs"].as_object().unwrap();
 	assert!(defs.contains_key("Job") && defs.contains_key("Step"));
 }
 
 #[test]
 fn a_composition_root_is_wrapped_and_a_bare_root_typed() {
-	let (wrapped, _, _) = only_tool(&doc(post_body(json!({"oneOf": [{"type": "object"}, {"type": "string"}]}))));
+	let (wrapped, _, _) = only_tool(&doc(post_body(
+		json!({"oneOf": [{"type": "object"}, {"type": "string"}]}),
+	)));
 	assert_eq!(wrapped.input_schema["type"], json!("object"));
-	assert_eq!(wrapped.input_schema["allOf"], json!([{"oneOf": [{"type": "object"}, {"type": "string"}]}]));
+	assert_eq!(
+		wrapped.input_schema["allOf"],
+		json!([{"oneOf": [{"type": "object"}, {"type": "string"}]}])
+	);
 
-	let (bare, _, _) = only_tool(&doc(post_body(json!({"properties": {"a": {"type": "string"}}}))));
+	let (bare, _, _) = only_tool(&doc(post_body(
+		json!({"properties": {"a": {"type": "string"}}}),
+	)));
 	assert_eq!(bare.input_schema["type"], json!("object"));
-	assert_eq!(bare.input_schema["properties"]["a"], json!({"type": "string"}));
+	assert_eq!(
+		bare.input_schema["properties"]["a"],
+		json!({"type": "string"})
+	);
 }
 
 #[test]
@@ -2454,9 +2498,17 @@ fn a_closed_composition_root_is_opened_for_its_parameters_with_a_warning() {
 			}
 		}
 	})));
-	assert_eq!(tool.input_schema["allOf"], json!([{"allOf": [{"type": "object", "properties": {"code": {"type": "string"}}}]}]));
+	assert_eq!(
+		tool.input_schema["allOf"],
+		json!([{"allOf": [{"type": "object", "properties": {"code": {"type": "string"}}}]}])
+	);
 	assert_eq!(tool.input_schema["required"], json!(["id"]));
-	assert!(warnings.contains(&"replaceJob: closed request body opened at the root so its parameters can sit beside it".to_string()));
+	assert!(
+		warnings.contains(
+			&"replaceJob: closed request body opened at the root so its parameters can sit beside it"
+				.to_string()
+		)
+	);
 }
 
 #[test]
@@ -2476,9 +2528,15 @@ fn read_only_properties_leave_the_input_and_write_only_ones_leave_the_output() {
 		}
 	})));
 	let input_props = tool.input_schema["properties"].as_object().unwrap();
-	assert!(!input_props.contains_key("id") && input_props.contains_key("name") && input_props.contains_key("secret"));
+	assert!(
+		!input_props.contains_key("id")
+			&& input_props.contains_key("name")
+			&& input_props.contains_key("secret")
+	);
 	assert_eq!(tool.input_schema["required"], json!(["name"]));
-	let output = tool.output_schema.expect("an object output schema is advertised");
+	let output = tool
+		.output_schema
+		.expect("an object output schema is advertised");
 	let output_props = output["properties"].as_object().unwrap();
 	assert!(output_props.contains_key("id") && !output_props.contains_key("secret"));
 }
@@ -2493,9 +2551,16 @@ fn openapi_only_keywords_are_stripped_and_a_singular_example_folds_into_examples
 		"example": {"a": 1},
 		"properties": {"a": {"type": "integer", "example": 1}}
 	}))));
-	assert!(tool.input_schema.get("discriminator").is_none() && tool.input_schema.get("xml").is_none() && tool.input_schema.get("externalDocs").is_none());
+	assert!(
+		tool.input_schema.get("discriminator").is_none()
+			&& tool.input_schema.get("xml").is_none()
+			&& tool.input_schema.get("externalDocs").is_none()
+	);
 	assert_eq!(tool.input_schema["examples"], json!([{"a": 1}]));
-	assert_eq!(tool.input_schema["properties"]["a"], json!({"type": "integer", "examples": [1]}));
+	assert_eq!(
+		tool.input_schema["properties"]["a"],
+		json!({"type": "integer", "examples": [1]})
+	);
 }
 
 #[test]
@@ -2513,32 +2578,47 @@ fn the_3_0_dialect_is_translated_to_2020_12_and_3_1_moves_verbatim() {
 	let mut v30 = doc(post_body(schema.clone()));
 	v30.openapi = "3.0.3".into();
 	let (tool, _, warnings) = only_tool(&v30);
-	assert_eq!(tool.input_schema["properties"], json!({
-		"name": {"type": ["string", "null"]},
-		"mode": {"type": ["string", "null"], "enum": ["fast", "slow", null]},
-		"above": {"type": "integer", "exclusiveMinimum": 0},
-		"inclusive": {"type": "integer", "minimum": 0}
-	}));
+	assert_eq!(
+		tool.input_schema["properties"],
+		json!({
+			"name": {"type": ["string", "null"]},
+			"mode": {"type": ["string", "null"], "enum": ["fast", "slow", null]},
+			"above": {"type": "integer", "exclusiveMinimum": 0},
+			"inclusive": {"type": "integer", "minimum": 0}
+		})
+	);
 	assert!(warnings[0].starts_with("document declares OpenAPI 3.0.3: schemas translated"));
 
 	let (tool, _, warnings) = only_tool(&doc(post_body(json!({
 		"type": "object",
 		"properties": {"name": {"type": ["string", "null"]}, "above": {"type": "number", "exclusiveMinimum": 0}, "kind": {"const": "widget"}}
 	}))));
-	assert_eq!(tool.input_schema["properties"], json!({
-		"name": {"type": ["string", "null"]}, "above": {"type": "number", "exclusiveMinimum": 0}, "kind": {"const": "widget"}
-	}));
+	assert_eq!(
+		tool.input_schema["properties"],
+		json!({
+			"name": {"type": ["string", "null"]}, "above": {"type": "number", "exclusiveMinimum": 0}, "kind": {"const": "widget"}
+		})
+	);
 	assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[test]
 fn json_media_type_suffixes_and_ranges_count_as_json() {
-	for media in ["application/vnd.api+json", "application/json; charset=utf-8", "application/*", "*/*"] {
+	for media in [
+		"application/vnd.api+json",
+		"application/json; charset=utf-8",
+		"application/*",
+		"*/*",
+	] {
 		let (tool, upstream, _) = only_tool(&doc(json!({
 			"/items": {"post": {"operationId": "put", "requestBody": {"content": {media: {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}}, "responses": {}}}
 		})));
 		assert!(upstream.request_body, "{media}");
-		assert_eq!(tool.input_schema["properties"]["a"], json!({"type": "string"}), "{media}");
+		assert_eq!(
+			tool.input_schema["properties"]["a"],
+			json!({"type": "string"}),
+			"{media}"
+		);
 	}
 }
 
@@ -2558,7 +2638,10 @@ fn several_distinct_success_payloads_become_an_any_of_and_only_objects_are_adver
 			"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}}
 		}}}
 	})));
-	assert!(tool.output_schema.is_none(), "a non-object output is not advertised");
+	assert!(
+		tool.output_schema.is_none(),
+		"a non-object output is not advertised"
+	);
 }
 
 #[test]
@@ -2568,15 +2651,25 @@ fn an_operation_without_an_operation_id_is_skipped_with_a_warning_not_a_failed_t
 		"/b": {"get": {"operationId": "b", "responses": {}}}
 	})))
 	.expect("the target loads");
-	assert_eq!(tools.iter().map(|(t, _)| t.name.to_string()).collect::<Vec<_>>(), ["b"]);
+	assert_eq!(
+		tools
+			.iter()
+			.map(|(t, _)| t.name.to_string())
+			.collect::<Vec<_>>(),
+		["b"]
+	);
 	assert!(warnings.contains(&"GET /a skipped: no operationId".to_string()));
 }
 
 #[test]
 fn an_external_ref_is_stubbed_with_a_warning() {
-	let (tool, _, warnings) = only_tool(&doc(post_body(json!({"type": "object", "properties": {"x": {"$ref": "https://elsewhere/schema.json"}}}))));
+	let (tool, _, warnings) = only_tool(&doc(post_body(
+		json!({"type": "object", "properties": {"x": {"$ref": "https://elsewhere/schema.json"}}}),
+	)));
 	assert_eq!(tool.input_schema["properties"]["x"], json!({}));
-	assert!(warnings.contains(&"external $ref not followed: https://elsewhere/schema.json".to_string()));
+	assert!(
+		warnings.contains(&"external $ref not followed: https://elsewhere/schema.json".to_string())
+	);
 }
 
 #[test]
@@ -2586,10 +2679,19 @@ fn an_operation_level_server_contributes_its_path_over_the_documents() {
 		json!({"/x": {"servers": [{"url": "/item"}], "get": {"operationId": "x", "servers": [{"url": "https://h/{v}/op", "variables": {"v": {"default": "v2"}}}], "responses": {}}}}),
 	));
 	assert_eq!(with_op.base_path.as_deref(), Some("/v2/op"));
-	let (_, with_item, _) = only_tool(&doc_with(json!({"servers": [{"url": "https://svc/doc"}]}), json!({"/x": {"servers": [{"url": "/item/"}], "get": {"operationId": "x", "responses": {}}}})));
+	let (_, with_item, _) = only_tool(&doc_with(
+		json!({"servers": [{"url": "https://svc/doc"}]}),
+		json!({"/x": {"servers": [{"url": "/item/"}], "get": {"operationId": "x", "responses": {}}}}),
+	));
 	assert_eq!(with_item.base_path.as_deref(), Some("/item"));
-	let (_, none, _) = only_tool(&doc_with(json!({"servers": [{"url": "https://svc/doc"}]}), json!({"/x": {"get": {"operationId": "x", "responses": {}}}})));
-	assert_eq!(none.base_path, None, "the document's servers are the handler's prefix, not the route's");
+	let (_, none, _) = only_tool(&doc_with(
+		json!({"servers": [{"url": "https://svc/doc"}]}),
+		json!({"/x": {"get": {"operationId": "x", "responses": {}}}}),
+	));
+	assert_eq!(
+		none.base_path, None,
+		"the document's servers are the handler's prefix, not the route's"
+	);
 }
 
 #[test]
@@ -2615,6 +2717,9 @@ fn a_3_1_document_with_what_3_1_adds_reads_without_loss() {
 	assert_eq!(props["tags"]["items"], json!(false));
 	assert_eq!(props["owner"]["$ref"], json!("#/$defs/Owner"));
 	assert_eq!(props["owner"]["description"], json!("who"));
-	assert_eq!(tool.input_schema["$defs"]["Owner"]["properties"]["id"]["exclusiveMinimum"], json!(0));
+	assert_eq!(
+		tool.input_schema["$defs"]["Owner"]["properties"]["id"]["exclusiveMinimum"],
+		json!(0)
+	);
 	assert!(warnings.is_empty(), "{warnings:?}");
 }
