@@ -25,6 +25,15 @@ use crate::{BackendConfig, ProxyInputs, client, mcp};
 
 // Helper to create a handler and mock server for tests.
 // Use prefix "" for no path prefix, or e.g. "/v2" for a path prefix.
+fn route(name: &str, location: ParameterLocation, required: bool) -> ParameterRoute {
+	ParameterRoute {
+		name: name.to_string(),
+		location,
+		key: name.to_string(),
+		required,
+	}
+}
+
 async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 	let server = MockServer::start().await;
 	let host = server.uri();
@@ -60,6 +69,8 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 	});
 
 	let client = PolicyClient::new(pi.clone());
+	// Tools carry a FLAT input schema: parameters beside body properties, each routed by
+	// the UpstreamOpenAPICall's parameter list.
 	let test_tool_get = Tool::new(
 		Cow::Borrowed("get_user"),
 		Cow::Borrowed("Get user details"),
@@ -67,27 +78,11 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 			json!({
 				"type": "object",
 				"properties": {
-					"path": {
-						"type": "object",
-						"properties": {
-							"user_id": {"type": "string"}
-						},
-						"required": ["user_id"]
-					},
-					"query": {
-						"type": "object",
-						"properties": {
-							"verbose": {"type": "string"}
-						}
-					},
-					"header": {
-						"type": "object",
-						"properties": {
-							"X-Request-ID": {"type": "string"}
-						}
-					}
+					"user_id": {"type": "string"},
+					"verbose": {"type": "string"},
+					"X-Request-ID": {"type": "string"}
 				},
-				"required": ["path"]
+				"required": ["user_id"]
 			})
 			.as_object()
 			.unwrap()
@@ -99,6 +94,13 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 		path: "/users/{user_id}".to_string(),
 		allowed_headers: HashSet::from(["X-Request-ID".to_string()]),
 		content_type: None,
+		parameters: vec![
+			route("user_id", ParameterLocation::Path, true),
+			route("verbose", ParameterLocation::Query, false),
+			route("X-Request-ID", ParameterLocation::Header, false),
+		],
+		request_body: false,
+		base_path: None,
 	};
 	let test_tool_doc = Tool::new(
 		Cow::Borrowed("get_doc"),
@@ -107,17 +109,11 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 			json!({
 				"type": "object",
 				"properties": {
-					"path": {
-						"type": "object",
-						"properties": {
-							"tenant": {"type": "string"},
-							"kind": {"type": "string"},
-							"id": {"type": "string"}
-						},
-						"required": ["tenant", "kind", "id"]
-					}
+					"tenant": {"type": "string"},
+					"kind": {"type": "string"},
+					"id": {"type": "string"}
 				},
-				"required": ["path"]
+				"required": ["tenant", "kind", "id"]
 			})
 			.as_object()
 			.unwrap()
@@ -129,8 +125,17 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 		path: "/v1/{tenant}/{kind}/{id}".to_string(),
 		allowed_headers: HashSet::new(),
 		content_type: None,
+		parameters: vec![
+			route("tenant", ParameterLocation::Path, true),
+			route("kind", ParameterLocation::Path, true),
+			route("id", ParameterLocation::Path, true),
+		],
+		request_body: false,
+		base_path: None,
 	};
 
+	// The body's own properties sit at the root; the framing headers are DECLARED here so
+	// the protected-header rule is what keeps them off the wire, not the schema.
 	let test_tool_post = Tool::new(
 		Cow::Borrowed("create_user"),
 		Cow::Borrowed("Create a new user"),
@@ -138,28 +143,16 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 			json!({
 				"type": "object",
 				"properties": {
-					"body": {
-						"type": "object",
-						"properties": {
-							"name": {"type": "string"},
-							"email": {"type": "string"}
-						},
-						"required": ["name", "email"]
-					},
-					"query": {
-						"type": "object",
-						"properties": {
-							"source": {"type": "string"}
-						}
-					},
-					"header": {
-						"type": "object",
-						"properties": {
-							"X-API-Key": {"type": "string"}
-						}
-					}
+					"name": {"type": "string"},
+					"email": {"type": "string"},
+					"source": {"type": "string"},
+					"X-API-Key": {"type": "string"},
+					"content-length": {"type": "string"},
+					"content-type": {"type": "string"},
+					"transfer-encoding": {"type": "string"},
+					"host": {"type": "string"}
 				},
-				"required": ["body"]
+				"required": ["name", "email"]
 			})
 			.as_object()
 			.unwrap()
@@ -169,8 +162,24 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 	let upstream_call_post = UpstreamOpenAPICall {
 		method: "POST".to_string(),
 		path: "/users".to_string(),
-		allowed_headers: HashSet::from(["X-API-Key".to_string()]),
+		allowed_headers: HashSet::from([
+			"X-API-Key".to_string(),
+			"content-length".to_string(),
+			"content-type".to_string(),
+			"transfer-encoding".to_string(),
+			"host".to_string(),
+		]),
 		content_type: None,
+		parameters: vec![
+			route("source", ParameterLocation::Query, false),
+			route("X-API-Key", ParameterLocation::Header, false),
+			route("content-length", ParameterLocation::Header, false),
+			route("content-type", ParameterLocation::Header, false),
+			route("transfer-encoding", ParameterLocation::Header, false),
+			route("host", ParameterLocation::Header, false),
+		],
+		request_body: true,
+		base_path: None,
 	};
 
 	let backend = SimpleBackend::Opaque(
@@ -260,7 +269,7 @@ async fn test_call_tool_full_url_server_prefix() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -299,7 +308,7 @@ async fn test_call_tool_path_prefix_server() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -328,7 +337,7 @@ async fn test_call_tool_get_simple_success() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -360,7 +369,7 @@ async fn test_call_tool_get_with_query() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id }, "query": { "verbose": verbose_flag } });
+	let args = json!({ "user_id": user_id, "verbose": verbose_flag });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -391,7 +400,7 @@ async fn test_call_tool_get_with_header() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id }, "header": { "X-Request-ID": request_id } });
+	let args = json!({ "user_id": user_id, "X-Request-ID": request_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -421,7 +430,7 @@ async fn test_call_tool_post_with_body() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "body": request_body });
+	let args = request_body.clone();
 	let result = handler
 		.call_tool(
 			"create_user",
@@ -456,9 +465,10 @@ async fn test_call_tool_post_all_params() {
 		.await;
 
 	let args = json!({
-			"body": request_body,
-			"query": { "source": source },
-			"header": { "X-API-Key": api_key }
+			"name": "Complete User",
+			"email": "complete@example.com",
+			"source": source,
+			"X-API-Key": api_key
 	});
 	let result = handler
 		.call_tool(
@@ -510,7 +520,7 @@ async fn test_call_tool_upstream_error() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -520,7 +530,10 @@ async fn test_call_tool_upstream_error() {
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap().structured_content.unwrap(), error_response);
+	let result = result.unwrap();
+	// A client error is the model's to act on: the body comes back, marked as an error.
+	assert_eq!(result.is_error, Some(true));
+	assert_eq!(result.structured_content.unwrap(), error_response);
 }
 
 #[tokio::test]
@@ -536,7 +549,7 @@ async fn test_call_tool_upstream_internal_error() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -569,10 +582,7 @@ async fn test_call_tool_invalid_header_value() {
 		.await;
 
 	// Intentionally provide a non-string header value
-	let args = json!({
-			"path": { "user_id": user_id },
-			"header": { "X-Request-ID": 12345 }
-	});
+	let args = json!({ "user_id": user_id, "X-Request-ID": 12345 });
 
 	let result = handler
 		.call_tool(
@@ -602,10 +612,7 @@ async fn test_call_tool_invalid_query_param_value() {
 		.await;
 
 	// Intentionally provide a non-string query value
-	let args = json!({
-			"path": { "user_id": user_id },
-			"query": { "verbose": true } // Invalid query value (not a string)
-	});
+	let args = json!({ "user_id": user_id, "verbose": true });
 
 	// We expect the call to succeed, but the invalid query param should be skipped (and logged)
 	let result = handler
@@ -625,9 +632,7 @@ async fn test_call_tool_invalid_query_param_value() {
 #[tokio::test]
 async fn test_call_tool_invalid_path_param_value() {
 	let (server, handler) = setup().await;
-	let args = json!({
-		"path": { "user_id": true }
-	});
+	let args = json!({ "user_id": true });
 
 	let error = handler
 		.call_tool(
@@ -665,7 +670,7 @@ async fn test_call_tool_with_compressed_response() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -716,7 +721,7 @@ async fn test_call_tool_response_wrapping() {
 			.mount(&server)
 			.await;
 
-		let args = json!({ "path": { "user_id": user_id } });
+		let args = json!({ "user_id": user_id });
 		let result = handler
 			.call_tool(
 				"get_user",
@@ -754,7 +759,7 @@ async fn test_call_tool_image_response() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": "img" } });
+	let args = json!({ "user_id": "img" });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -791,7 +796,7 @@ async fn test_call_tool_text_response_ignores_content_type() {
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": "txt" } });
+	let args = json!({ "user_id": "txt" });
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -903,18 +908,6 @@ fn tool_schema_for<'a>(
 		.expect("tool should exist")
 }
 
-fn nested_schema<'a>(
-	schema: &'a serde_json::Map<String, serde_json::Value>,
-	name: &str,
-) -> &'a serde_json::Map<String, serde_json::Value> {
-	schema
-		.get("properties")
-		.and_then(serde_json::Value::as_object)
-		.and_then(|props| props.get(name))
-		.and_then(serde_json::Value::as_object)
-		.expect("nested schema should exist")
-}
-
 #[test]
 fn test_parse_openapi_schema_maps_summary_to_tool_title() {
 	let raw = r#"{
@@ -1003,30 +996,30 @@ fn test_parse_openapi_schema_requires_path_item_parameters(#[case] required: Opt
 	assert_eq!(upstream.path, "/workspaces/{workspace_gid}/tags");
 
 	let schema = tool_schema_for(&tools, "getTagsForWorkspace");
+	let properties = schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("tool schema should include properties");
+	assert!(
+		properties.contains_key("workspace_gid"),
+		"path-level workspace_gid should be exposed in tool schema"
+	);
 	let required = schema
 		.get("required")
 		.and_then(serde_json::Value::as_array)
 		.expect("tool schema should include required array");
 	assert!(
-		required.iter().any(|value| value == "path"),
-		"path should be required in the tool schema"
-	);
-	let path_schema = nested_schema(schema, "path");
-	let properties = path_schema
-		.get("properties")
-		.and_then(serde_json::Value::as_object)
-		.expect("path object should include properties");
-	assert!(
-		properties.contains_key("workspace_gid"),
-		"path-level workspace_gid should be exposed in tool schema"
-	);
-	let required = path_schema
-		.get("required")
-		.and_then(serde_json::Value::as_array)
-		.expect("path object should include required array");
-	assert!(
 		required.iter().any(|value| value == "workspace_gid"),
-		"workspace_gid should be required in the path schema"
+		"a path parameter is required whatever the document says"
+	);
+	assert_eq!(
+		upstream.parameters,
+		vec![ParameterRoute {
+			name: "workspace_gid".into(),
+			location: ParameterLocation::Path,
+			key: "workspace_gid".into(),
+			required: true,
+		}]
 	);
 }
 
@@ -1073,11 +1066,10 @@ fn test_parse_openapi_schema_operation_level_parameter_overrides_path_level_para
 	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
 
 	let schema = tool_schema_for(&tools, "getWorkspaceTag");
-	let path_schema = nested_schema(schema, "path");
-	let path_properties = path_schema
+	let path_properties = schema
 		.get("properties")
 		.and_then(serde_json::Value::as_object)
-		.expect("path object should include properties");
+		.expect("tool schema should include properties");
 	let workspace_gid = path_properties
 		.get("workspace_gid")
 		.and_then(serde_json::Value::as_object)
@@ -1088,10 +1080,10 @@ fn test_parse_openapi_schema_operation_level_parameter_overrides_path_level_para
 	);
 	assert_eq!(workspace_gid.get("pattern"), Some(&json!("^ws_")));
 
-	let required = path_schema
+	let required = schema
 		.get("required")
 		.and_then(serde_json::Value::as_array)
-		.expect("path object should include required array");
+		.expect("tool schema should include required array");
 	assert_eq!(required, &vec![json!("workspace_gid"), json!("tag_gid")]);
 
 	assert!(
@@ -1147,11 +1139,10 @@ fn test_parse_openapi_schema_operation_level_header_override_is_case_insensitive
 	);
 
 	let schema = &*tool.input_schema;
-	let header_schema = nested_schema(schema, "header");
-	let header_properties = header_schema
+	let header_properties = schema
 		.get("properties")
 		.and_then(serde_json::Value::as_object)
-		.expect("header object should include properties");
+		.expect("tool schema should include properties");
 	assert_eq!(header_properties.len(), 1);
 	let request_id = header_properties
 		.get("x-request-id")
@@ -1163,15 +1154,15 @@ fn test_parse_openapi_schema_operation_level_header_override_is_case_insensitive
 	);
 	assert_eq!(request_id.get("pattern"), Some(&json!("^req_")));
 
-	let required = header_schema
+	let required = schema
 		.get("required")
 		.and_then(serde_json::Value::as_array)
-		.expect("header object should include required array");
+		.expect("tool schema should include required array");
 	assert_eq!(required, &vec![json!("x-request-id")]);
 }
 
 #[test]
-fn test_parse_openapi_schema_ignores_path_level_cookie_parameters() {
+fn test_parse_openapi_schema_documents_but_never_sends_cookie_parameters() {
 	let raw = r#"{
 		"openapi": "3.0.0",
 		"info": {"title": "Cookie Params", "version": "1.0.0"},
@@ -1203,22 +1194,25 @@ fn test_parse_openapi_schema_ignores_path_level_cookie_parameters() {
 	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
 	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
 
+	let (_, upstream) = tools
+		.iter()
+		.find(|(tool, _)| tool.name == "getTagsForWorkspace")
+		.expect("tool should exist");
 	let schema = tool_schema_for(&tools, "getTagsForWorkspace");
 	let properties = schema
 		.get("properties")
 		.and_then(serde_json::Value::as_object)
 		.expect("root schema should include properties");
+	// Documented, so a model knows the service takes it; routed as a cookie, which the
+	// call never sends rather than guessing it into a Cookie header.
+	assert!(properties.contains_key("session"));
+	assert!(properties.contains_key("workspace_gid"));
 	assert!(
-		!properties.contains_key("cookie"),
-		"path-level cookie parameters should not create a cookie schema"
+		upstream
+			.parameters
+			.iter()
+			.any(|p| p.name == "session" && p.location == ParameterLocation::Cookie)
 	);
-
-	let path_schema = nested_schema(schema, "path");
-	let path_properties = path_schema
-		.get("properties")
-		.and_then(serde_json::Value::as_object)
-		.expect("path object should include properties");
-	assert!(path_properties.contains_key("workspace_gid"));
 }
 
 #[test]
@@ -1274,18 +1268,19 @@ fn test_parse_openapi_schema_bundles_recursive_component_schemas() {
 	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
 	let tools = super::parse_openapi_schema(&open_api).expect("recursive schemas should parse");
 
+	// The body's root $ref is inlined (MCP wants a literal object root) and the query
+	// parameter sits beside its properties; the closure travels under $defs.
 	assert_eq!(
 		Value::Object(tool_schema_for(&tools, "createNode").clone()),
 		json!({
 			"type": "object",
-			"required": ["body", "query"],
+			"required": ["root"],
 			"properties": {
-				"body": {"$ref": "#/$defs/Node"},
-				"query": {
-					"type": "object",
-					"required": ["root"],
-					"properties": {"root": {"$ref": "#/$defs/A"}}
-				}
+				"children": {
+					"type": "array",
+					"items": {"$ref": "#/$defs/Node"}
+				},
+				"root": {"$ref": "#/$defs/A"}
 			},
 			"$defs": {
 				"Node": {
@@ -1311,25 +1306,40 @@ fn test_parse_openapi_schema_bundles_recursive_component_schemas() {
 }
 
 #[test]
-fn test_bundle_component_schema_refs_rejects_other_component_refs() {
+fn test_parse_openapi_schema_degrades_a_dangling_ref_to_an_empty_schema_with_a_warning() {
 	let open_api: OpenAPI = serde_json::from_value(json!({
 		"openapi": "3.0.0",
 		"info": {"title": "Invalid schema ref", "version": "1.0.0"},
-		"paths": {},
+		"paths": {
+			"/a": {
+				"post": {
+					"operationId": "postA",
+					"requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/A"}}}},
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		},
 		"components": {
 			"schemas": {
-				"A": {"$ref": "#/components/parameters/not-a-schema"}
+				"A": {"type": "object", "properties": {"b": {"$ref": "#/components/parameters/not-a-schema"}}}
 			}
 		}
 	}))
 	.expect("valid OpenAPI document");
-	let mut schema = json!({"$ref": "#/components/schemas/A"});
 
-	assert!(matches!(
-		super::bundle_component_schema_refs(&mut schema, &open_api),
-		Err(ParseError::UnsupportedReference(reference))
-			if reference == "#/components/parameters/not-a-schema"
-	));
+	// A reference the document cannot satisfy costs that one schema, not the target.
+	let (tools, warnings) =
+		super::parse_openapi_schema_with_warnings(&open_api).expect("the target still loads");
+	assert_eq!(
+		tool_schema_for(&tools, "postA").get("properties"),
+		Some(&json!({"b": {}}))
+	);
+	assert!(
+		warnings
+			.iter()
+			.any(|w| w == "dangling $ref dropped: #/components/parameters/not-a-schema"),
+		"warnings: {warnings:?}"
+	);
 }
 
 #[rstest]
@@ -1363,10 +1373,11 @@ async fn test_query_param_types(
 		.mount(&server)
 		.await;
 
-	let args = json!({
-		"path": { "user_id": user_id },
-		"query": query_args
-	});
+	let mut args = json!({ "user_id": user_id });
+	args
+		.as_object_mut()
+		.unwrap()
+		.extend(query_args.as_object().unwrap().clone());
 
 	let result = handler
 		.call_tool(
@@ -1406,7 +1417,7 @@ async fn test_path_param_encoding(#[case] user_id: &str, #[case] expected_path: 
 		.mount(&server)
 		.await;
 
-	let args = json!({ "path": { "user_id": user_id } });
+	let args = json!({ "user_id": user_id });
 
 	let result = handler
 		.call_tool(
@@ -1441,7 +1452,7 @@ fn rejects_unsafe_path_params(#[case] value: &str) {
 #[tokio::test]
 async fn rejects_traversal_before_sending() {
 	let (server, handler) = setup().await;
-	let args = json!({ "path": { "user_id": "../admin" } });
+	let args = json!({ "user_id": "../admin" });
 
 	let error = handler
 		.call_tool(
@@ -1459,7 +1470,7 @@ async fn rejects_traversal_before_sending() {
 #[tokio::test]
 async fn rejects_segment_injection_before_sending() {
 	let (server, handler) = setup().await;
-	let args = json!({ "path": { "user_id": "123/../admin" } });
+	let args = json!({ "user_id": "123/../admin" });
 
 	let error = handler
 		.call_tool(
@@ -1497,9 +1508,7 @@ fn accepts_numeric_path_params() {
 #[tokio::test]
 async fn rejects_multi_parameter_dot_segment_traversal_before_sending() {
 	let (server, handler) = setup().await;
-	let args = json!({
-		"path": {"tenant": "..", "kind": "..", "id": "internal"}
-	});
+	let args = json!({ "tenant": "..", "kind": "..", "id": "internal" });
 
 	let error = handler
 		.call_tool(
@@ -1530,12 +1539,7 @@ async fn test_schema_defined_headers_work() {
 		.mount(&server)
 		.await;
 
-	let args = json!({
-		"path": { "user_id": user_id },
-		"header": {
-			"X-Request-ID": "my-request-123"
-		}
-	});
+	let args = json!({ "user_id": user_id, "X-Request-ID": "my-request-123" });
 
 	let result = handler
 		.call_tool(
@@ -1594,13 +1598,12 @@ async fn test_blocked_headers_are_ignored() {
 		.await;
 
 	let args = json!({
-		"body": request_body,
-		"header": {
-			"content-length": "999999999",
-			"content-type": "text/plain",
-			"transfer-encoding": "chunked",
-			"host": "evil.com"
-		}
+		"name": "Test User",
+		"email": "test@example.com",
+		"content-length": "999999999",
+		"content-type": "text/plain",
+		"transfer-encoding": "chunked",
+		"host": "evil.com"
 	});
 
 	let result = handler
@@ -1636,12 +1639,11 @@ async fn test_headers_not_in_schema_are_ignored() {
 		.mount(&server)
 		.await;
 
+	// An undeclared key is nothing to this body-less operation: it is neither a header nor sent.
 	let args = json!({
-		"path": { "user_id": user_id },
-		"header": {
-			"X-Request-ID": "valid-request",
-			"X-Malicious-Header": "should-be-ignored"
-		}
+		"user_id": user_id,
+		"X-Request-ID": "valid-request",
+		"X-Malicious-Header": "should-be-ignored"
 	});
 
 	let result = handler
@@ -1686,7 +1688,7 @@ async fn test_call_tool_structured_content_fallback() {
 		id: RequestId::String("test-123".into()),
 		request: ClientRequest::CallToolRequest(CallToolRequest::new(
 			CallToolRequestParams::new("get_user").with_arguments(
-				json!({ "path": { "user_id": user_id } })
+				json!({ "user_id": user_id })
 					.as_object()
 					.unwrap()
 					.clone(),
@@ -2215,6 +2217,7 @@ async fn test_call_tool_with_binary_body() {
 		path: "/upload".to_string(),
 		allowed_headers: HashSet::new(),
 		content_type: Some("application/octet-stream".to_string()),
+		..Default::default()
 	};
 
 	let backend = SimpleBackend::Opaque(
@@ -2266,4 +2269,352 @@ async fn test_call_tool_with_binary_body() {
 		result.unwrap().structured_content.unwrap(),
 		expected_response
 	);
+}
+
+// ── The reader's fidelity: what the document says reaches the model ─────────────────────
+
+fn doc(paths: Value) -> OpenAPI {
+	doc_with(json!({}), paths)
+}
+
+fn doc_with(extra: Value, paths: Value) -> OpenAPI {
+	let mut document = json!({
+		"openapi": "3.1.0",
+		"info": {"title": "Fixture", "version": "1"},
+		"paths": paths
+	});
+	for (k, v) in extra.as_object().unwrap() {
+		document[k] = v.clone();
+	}
+	serde_json::from_value(document).expect("a valid document")
+}
+
+fn only_tool(open_api: &OpenAPI) -> (Tool, UpstreamOpenAPICall, Vec<String>) {
+	let (mut tools, warnings) = super::parse_openapi_schema_with_warnings(open_api).expect("parses");
+	assert_eq!(tools.len(), 1, "one operation expected, got {:?}", tools.iter().map(|t| t.0.name.to_string()).collect::<Vec<_>>());
+	let (tool, upstream) = tools.pop().unwrap();
+	(tool, upstream, warnings)
+}
+
+fn post_body(schema: Value) -> Value {
+	json!({
+		"/things": {
+			"post": {
+				"operationId": "makeThing",
+				"requestBody": {"content": {"application/json": {"schema": schema}}},
+				"responses": {}
+			}
+		}
+	})
+}
+
+#[test]
+fn flat_input_merges_parameters_beside_the_body_and_prefixes_a_collision() {
+	let (tool, upstream, _) = only_tool(&doc(json!({
+		"/jobs/{id}/logs": {
+			"parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+			"post": {
+				"operationId": "readLogs",
+				"parameters": [
+					{"name": "since", "in": "query", "schema": {"type": "string"}},
+					{"name": "X-Trace", "in": "header", "schema": {"type": "string"}},
+					{"name": "format", "in": "query", "required": true, "schema": {"type": "string"}}
+				],
+				"requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"format": {"type": "string"}}}}}},
+				"responses": {}
+			}
+		}
+	})));
+	let mut keys: Vec<_> = tool.input_schema["properties"].as_object().unwrap().keys().cloned().collect();
+	keys.sort();
+	assert_eq!(keys, ["X-Trace", "format", "id", "query_format", "since"]);
+	assert_eq!(tool.input_schema["required"], json!(["id", "query_format"]));
+	assert!(upstream.request_body);
+	assert_eq!(
+		upstream.parameters,
+		vec![
+			route("id", ParameterLocation::Path, true),
+			route("since", ParameterLocation::Query, false),
+			route("X-Trace", ParameterLocation::Header, false),
+			ParameterRoute { name: "format".into(), location: ParameterLocation::Query, key: "query_format".into(), required: true },
+		]
+	);
+}
+
+#[tokio::test]
+async fn a_collided_parameter_travels_by_its_location_and_the_body_keeps_its_own() {
+	let server = MockServer::start().await;
+	let host = server.uri();
+	let parsed = reqwest::Url::parse(&host).unwrap();
+	let (tool, mut upstream, _) = only_tool(&doc(json!({
+		"/jobs": {
+			"post": {
+				"operationId": "submit",
+				"parameters": [{"name": "format", "in": "query", "schema": {"type": "string"}}],
+				"requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"format": {"type": "string"}, "code": {"type": "string"}}}}}},
+				"responses": {}
+			}
+		}
+	})));
+	upstream.base_path = None;
+	let handler = handler_for(&parsed, vec![(tool, upstream)]).await;
+	Mock::given(method("POST"))
+		.and(path("/jobs"))
+		.and(query_param("format", "json"))
+		.and(body_json(&json!({"format": "py", "code": "print(1)"})))
+		.respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+		.expect(1)
+		.mount(&server)
+		.await;
+	let result = handler
+		.call_tool(
+			"submit",
+			Some(json!({"query_format": "json", "format": "py", "code": "print(1)"}).as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await
+		.expect("the call succeeds");
+	assert_eq!(result.structured_content, Some(json!({"ok": true})));
+}
+
+async fn handler_for(parsed: &reqwest::Url, tools: Vec<(Tool, UpstreamOpenAPICall)>) -> Handler {
+	let config = crate::config::parse_config("{}".to_string(), None).unwrap();
+	let encoder = config.session_encoder.clone();
+	let stores = Stores::with_ipv6_enabled(config.ipv6_enabled);
+	let client = Client::new(
+		&client::Config {
+			resolver_cfg: ResolverConfig::default(),
+			resolver_opts: ResolverOpts::default(),
+		},
+		None,
+		BackendConfig::default(),
+		None,
+	);
+	let pi = Arc::new(ProxyInputs {
+		cfg: Arc::new(config),
+		stores: stores.clone(),
+		metrics: Arc::new(crate::metrics::Metrics::new(
+			metrics::sub_registry(&mut Registry::default()),
+			Default::default(),
+			Default::default(),
+		)),
+		model_catalog: crate::llm::catalog::ModelCatalog::empty(),
+		admin: None,
+		upstream: client.clone(),
+		ca: None,
+		spiffe: None,
+		mcp_state: mcp::router::App::new(stores.clone(), encoder),
+		admission: Default::default(),
+	});
+	let client = PolicyClient::new(pi.clone());
+	let backend = SimpleBackend::Opaque(
+		ResourceName::new(strng::literal!("dummy"), "".into()),
+		Target::Hostname(parsed.host().unwrap().to_string().into(), parsed.port().unwrap_or(8080)),
+	);
+	let upstream_client = super::super::McpHttpClient::new(client, backend, BackendPolicies::default(), false, "test-target".to_string());
+	Handler::new(upstream_client, tools, "".to_string())
+}
+
+#[test]
+fn a_root_ref_body_is_inlined_and_its_closure_lands_under_defs() {
+	let (tool, _, _) = only_tool(&doc_with(
+		json!({"components": {"schemas": {
+			"Job": {"type": "object", "properties": {"step": {"$ref": "#/components/schemas/Step"}, "next": {"$ref": "#/components/schemas/Job"}}},
+			"Step": {"type": "object", "properties": {"name": {"type": "string"}}}
+		}}}),
+		post_body(json!({"$ref": "#/components/schemas/Job"})),
+	));
+	assert_eq!(tool.input_schema["type"], json!("object"));
+	assert_eq!(tool.input_schema["properties"]["step"], json!({"$ref": "#/$defs/Step"}));
+	assert_eq!(tool.input_schema["properties"]["next"], json!({"$ref": "#/$defs/Job"}));
+	let defs = tool.input_schema["$defs"].as_object().unwrap();
+	assert!(defs.contains_key("Job") && defs.contains_key("Step"));
+}
+
+#[test]
+fn a_composition_root_is_wrapped_and_a_bare_root_typed() {
+	let (wrapped, _, _) = only_tool(&doc(post_body(json!({"oneOf": [{"type": "object"}, {"type": "string"}]}))));
+	assert_eq!(wrapped.input_schema["type"], json!("object"));
+	assert_eq!(wrapped.input_schema["allOf"], json!([{"oneOf": [{"type": "object"}, {"type": "string"}]}]));
+
+	let (bare, _, _) = only_tool(&doc(post_body(json!({"properties": {"a": {"type": "string"}}}))));
+	assert_eq!(bare.input_schema["type"], json!("object"));
+	assert_eq!(bare.input_schema["properties"]["a"], json!({"type": "string"}));
+}
+
+#[test]
+fn a_closed_composition_root_is_opened_for_its_parameters_with_a_warning() {
+	let (tool, _, warnings) = only_tool(&doc(json!({
+		"/jobs/{id}": {
+			"put": {
+				"operationId": "replaceJob",
+				"parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+				"requestBody": {"content": {"application/json": {"schema": {"allOf": [{"type": "object", "properties": {"code": {"type": "string"}}}], "additionalProperties": false}}}},
+				"responses": {}
+			}
+		}
+	})));
+	assert_eq!(tool.input_schema["allOf"], json!([{"allOf": [{"type": "object", "properties": {"code": {"type": "string"}}}]}]));
+	assert_eq!(tool.input_schema["required"], json!(["id"]));
+	assert!(warnings.contains(&"replaceJob: closed request body opened at the root so its parameters can sit beside it".to_string()));
+}
+
+#[test]
+fn read_only_properties_leave_the_input_and_write_only_ones_leave_the_output() {
+	let (tool, _, _) = only_tool(&doc(json!({
+		"/things": {
+			"post": {
+				"operationId": "makeThing",
+				"requestBody": {"content": {"application/json": {"schema": {
+					"type": "object", "required": ["id", "name"],
+					"properties": {"id": {"type": "string", "readOnly": true}, "name": {"type": "string"}, "secret": {"type": "string", "writeOnly": true}}
+				}}}},
+				"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {
+					"type": "object", "properties": {"id": {"type": "string"}, "secret": {"type": "string", "writeOnly": true}}
+				}}}}}
+			}
+		}
+	})));
+	let input_props = tool.input_schema["properties"].as_object().unwrap();
+	assert!(!input_props.contains_key("id") && input_props.contains_key("name") && input_props.contains_key("secret"));
+	assert_eq!(tool.input_schema["required"], json!(["name"]));
+	let output = tool.output_schema.expect("an object output schema is advertised");
+	let output_props = output["properties"].as_object().unwrap();
+	assert!(output_props.contains_key("id") && !output_props.contains_key("secret"));
+}
+
+#[test]
+fn openapi_only_keywords_are_stripped_and_a_singular_example_folds_into_examples() {
+	let (tool, _, _) = only_tool(&doc(post_body(json!({
+		"type": "object",
+		"discriminator": {"propertyName": "kind"},
+		"xml": {"name": "thing"},
+		"externalDocs": {"url": "https://example.com"},
+		"example": {"a": 1},
+		"properties": {"a": {"type": "integer", "example": 1}}
+	}))));
+	assert!(tool.input_schema.get("discriminator").is_none() && tool.input_schema.get("xml").is_none() && tool.input_schema.get("externalDocs").is_none());
+	assert_eq!(tool.input_schema["examples"], json!([{"a": 1}]));
+	assert_eq!(tool.input_schema["properties"]["a"], json!({"type": "integer", "examples": [1]}));
+}
+
+#[test]
+fn the_3_0_dialect_is_translated_to_2020_12_and_3_1_moves_verbatim() {
+	let schema = json!({
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "nullable": true},
+			"mode": {"type": "string", "enum": ["fast", "slow"], "nullable": true},
+			"above": {"type": "integer", "minimum": 0, "exclusiveMinimum": true},
+			"inclusive": {"type": "integer", "minimum": 0, "exclusiveMinimum": false}
+		}
+	});
+	// (integer, not number: the typed 3.0 model writes a number bound back as a float, 0.0)
+	let mut v30 = doc(post_body(schema.clone()));
+	v30.openapi = "3.0.3".into();
+	let (tool, _, warnings) = only_tool(&v30);
+	assert_eq!(tool.input_schema["properties"], json!({
+		"name": {"type": ["string", "null"]},
+		"mode": {"type": ["string", "null"], "enum": ["fast", "slow", null]},
+		"above": {"type": "integer", "exclusiveMinimum": 0},
+		"inclusive": {"type": "integer", "minimum": 0}
+	}));
+	assert!(warnings[0].starts_with("document declares OpenAPI 3.0.3: schemas translated"));
+
+	let (tool, _, warnings) = only_tool(&doc(post_body(json!({
+		"type": "object",
+		"properties": {"name": {"type": ["string", "null"]}, "above": {"type": "number", "exclusiveMinimum": 0}, "kind": {"const": "widget"}}
+	}))));
+	assert_eq!(tool.input_schema["properties"], json!({
+		"name": {"type": ["string", "null"]}, "above": {"type": "number", "exclusiveMinimum": 0}, "kind": {"const": "widget"}
+	}));
+	assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn json_media_type_suffixes_and_ranges_count_as_json() {
+	for media in ["application/vnd.api+json", "application/json; charset=utf-8", "application/*", "*/*"] {
+		let (tool, upstream, _) = only_tool(&doc(json!({
+			"/items": {"post": {"operationId": "put", "requestBody": {"content": {media: {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}}, "responses": {}}}
+		})));
+		assert!(upstream.request_body, "{media}");
+		assert_eq!(tool.input_schema["properties"]["a"], json!({"type": "string"}), "{media}");
+	}
+}
+
+#[test]
+fn several_distinct_success_payloads_become_an_any_of_and_only_objects_are_advertised() {
+	let (tool, _, _) = only_tool(&doc(json!({
+		"/items": {"get": {"operationId": "list", "responses": {
+			"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}},
+			"202": {"description": "later", "content": {"application/json": {"schema": {"type": "object", "properties": {"b": {"type": "string"}}}}}}
+		}}}
+	})));
+	// anyOf has no root type, so it is kept for the resource later, not advertised as the tool's output.
+	assert!(tool.output_schema.is_none());
+
+	let (tool, _, _) = only_tool(&doc(json!({
+		"/items": {"get": {"operationId": "list", "responses": {
+			"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}}
+		}}}
+	})));
+	assert!(tool.output_schema.is_none(), "a non-object output is not advertised");
+}
+
+#[test]
+fn an_operation_without_an_operation_id_is_skipped_with_a_warning_not_a_failed_target() {
+	let (tools, warnings) = super::parse_openapi_schema_with_warnings(&doc(json!({
+		"/a": {"get": {"responses": {}}},
+		"/b": {"get": {"operationId": "b", "responses": {}}}
+	})))
+	.expect("the target loads");
+	assert_eq!(tools.iter().map(|(t, _)| t.name.to_string()).collect::<Vec<_>>(), ["b"]);
+	assert!(warnings.contains(&"GET /a skipped: no operationId".to_string()));
+}
+
+#[test]
+fn an_external_ref_is_stubbed_with_a_warning() {
+	let (tool, _, warnings) = only_tool(&doc(post_body(json!({"type": "object", "properties": {"x": {"$ref": "https://elsewhere/schema.json"}}}))));
+	assert_eq!(tool.input_schema["properties"]["x"], json!({}));
+	assert!(warnings.contains(&"external $ref not followed: https://elsewhere/schema.json".to_string()));
+}
+
+#[test]
+fn an_operation_level_server_contributes_its_path_over_the_documents() {
+	let (_, with_op, _) = only_tool(&doc_with(
+		json!({"servers": [{"url": "https://svc/doc"}]}),
+		json!({"/x": {"servers": [{"url": "/item"}], "get": {"operationId": "x", "servers": [{"url": "https://h/{v}/op", "variables": {"v": {"default": "v2"}}}], "responses": {}}}}),
+	));
+	assert_eq!(with_op.base_path.as_deref(), Some("/v2/op"));
+	let (_, with_item, _) = only_tool(&doc_with(json!({"servers": [{"url": "https://svc/doc"}]}), json!({"/x": {"servers": [{"url": "/item/"}], "get": {"operationId": "x", "responses": {}}}})));
+	assert_eq!(with_item.base_path.as_deref(), Some("/item"));
+	let (_, none, _) = only_tool(&doc_with(json!({"servers": [{"url": "https://svc/doc"}]}), json!({"/x": {"get": {"operationId": "x", "responses": {}}}})));
+	assert_eq!(none.base_path, None, "the document's servers are the handler's prefix, not the route's");
+}
+
+#[test]
+fn a_3_1_document_with_what_3_1_adds_reads_without_loss() {
+	let (tool, _, warnings) = only_tool(&doc_with(
+		json!({"components": {"schemas": {"Owner": {"type": "object", "properties": {"id": {"type": "integer", "exclusiveMinimum": 0}}}}}}),
+		post_body(json!({
+			"type": "object",
+			"properties": {
+				"nickname": {"type": ["string", "null"]},
+				"priority": {"type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 10},
+				"kind": {"const": "widget"},
+				"tags": {"type": "array", "prefixItems": [{"type": "string"}], "items": false},
+				"owner": {"$ref": "#/components/schemas/Owner", "description": "who", "writeOnly": true}
+			}
+		})),
+	));
+	let props = &tool.input_schema["properties"];
+	assert_eq!(props["nickname"]["type"], json!(["string", "null"]));
+	assert_eq!(props["priority"]["exclusiveMinimum"], json!(0));
+	assert_eq!(props["kind"]["const"], json!("widget"));
+	assert_eq!(props["tags"]["prefixItems"], json!([{"type": "string"}]));
+	assert_eq!(props["tags"]["items"], json!(false));
+	assert_eq!(props["owner"]["$ref"], json!("#/$defs/Owner"));
+	assert_eq!(props["owner"]["description"], json!("who"));
+	assert_eq!(tool.input_schema["$defs"]["Owner"]["properties"]["id"]["exclusiveMinimum"], json!(0));
+	assert!(warnings.is_empty(), "{warnings:?}");
 }
