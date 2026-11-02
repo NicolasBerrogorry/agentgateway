@@ -144,7 +144,7 @@ notify-debouncer-full = "0.7"
 md-5 = "0.11"
 num_cpus = "1.17"
 once_cell = "1.21"
-openapiv3 = "2.2"
+openapiv3 = { git = "https://github.com/NicolasBerrogorry/openapiv3", rev = "9e02e5ea2185" }
 opentelemetry = "0.33"
 opentelemetry-http = "0.33"
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "internal-logs", "trace", "grpc-tonic", "logs"] }
