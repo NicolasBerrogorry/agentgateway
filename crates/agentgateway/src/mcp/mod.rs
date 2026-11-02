@@ -5,6 +5,7 @@ pub(crate) mod guardrails;
 mod handler;
 mod mergestream;
 mod rbac;
+mod rest;
 mod router;
 mod session;
 mod sse;

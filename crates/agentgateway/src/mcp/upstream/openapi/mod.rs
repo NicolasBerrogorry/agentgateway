@@ -547,7 +547,7 @@ fn substitute_path_params(
 
 /// Normalizes URL path construction to avoid double slashes
 /// Ensures exactly one slash between prefix and path components
-fn normalize_url_path(prefix: &str, path: &str) -> String {
+pub(crate) fn normalize_url_path(prefix: &str, path: &str) -> String {
 	let prefix = prefix.trim_end_matches('/');
 	let path = if path.starts_with('/') {
 		path
