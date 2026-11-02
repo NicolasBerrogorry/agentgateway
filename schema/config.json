@@ -98,7 +98,7 @@
       ]
     },
     "mcp": {
-      "description": "mcp defines a set of MCP servers exposed by the proxy. When configured, the MCP servers will be\nserved under the attached `gateways` at /mcp and /sse.\nAll MCP servers listed will be served as a single virtual MCP server.",
+      "description": "mcp defines a set of MCP servers exposed by the proxy. When configured, the MCP servers will be\nserved under the attached `gateways` at /mcp and /sse, and OpenAPI targets as plain HTTP at /rest.\nAll MCP servers listed will be served as a single virtual MCP server.",
       "anyOf": [
         {
           "$ref": "#/$defs/LocalSimpleMcpConfig"

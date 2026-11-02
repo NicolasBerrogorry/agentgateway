@@ -1351,7 +1351,7 @@ ui:
 				other => panic!("expected path prefix match, got {other:?}"),
 			})
 			.collect::<Vec<_>>(),
-		vec!["/mcp", "/sse", "/.well-known"],
+		vec!["/mcp", "/sse", "/rest", "/.well-known"],
 	);
 	let ui_route = routes
 		.iter()
